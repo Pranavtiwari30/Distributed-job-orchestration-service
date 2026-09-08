@@ -1,0 +1,81 @@
+[project]
+name = "conductor"
+version = "0.1.0"
+description = "A distributed job orchestration service: DAG workflows, exactly-once execution, and pluggable retry policies."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy>=2.0.36",
+    "psycopg[binary]>=3.2",
+    "alembic>=1.14",
+    "httpx>=0.28",
+    "structlog>=24.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "pytest-asyncio>=0.24",
+    "hypothesis>=6.119",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "freezegun>=1.5",
+]
+
+[project.scripts]
+conductor-api = "conductor.api.app:main"
+conductor-worker = "conductor.worker.worker:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/conductor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "integration: requires a live PostgreSQL database",
+]
+
+[tool.coverage.run]
+source = ["src/conductor"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "C4", "SIM", "RET", "ARG", "PTH"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency system is *built* on calls in argument defaults; B008 is
+# a real bug elsewhere, so it is exempted per-callable rather than disabled.
+extend-immutable-calls = [
+    "fastapi.Body",
+    "fastapi.Depends",
+    "fastapi.Header",
+    "fastapi.Path",
+    "fastapi.Query",
+]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["conductor"]
+mypy_path = "src"
+strict = true
+warn_unreachable = true
