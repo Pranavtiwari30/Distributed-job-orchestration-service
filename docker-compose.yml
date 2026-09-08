@@ -1,0 +1,61 @@
+# Local development stack: database, API, and a pool of workers.
+#
+#   docker compose up --build          -- everything
+#   docker compose up -d db            -- just Postgres, for running tests locally
+#   docker compose up --scale worker=5 -- prove the queue scales
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: conductor
+      POSTGRES_PASSWORD: conductor
+      POSTGRES_DB: conductor
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Other services wait on this rather than sleeping and hoping.
+      test: ["CMD-SHELL", "pg_isready -U conductor -d conductor"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: .
+    command: alembic upgrade head
+    environment:
+      CONDUCTOR_DATABASE_URL: postgresql+psycopg://conductor:conductor@db/conductor
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    command: conductor-api
+    environment:
+      CONDUCTOR_DATABASE_URL: postgresql+psycopg://conductor:conductor@db/conductor
+      CONDUCTOR_ENVIRONMENT: docker
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build: .
+    command: conductor-worker
+    environment:
+      CONDUCTOR_DATABASE_URL: postgresql+psycopg://conductor:conductor@db/conductor
+      CONDUCTOR_LEASE_SECONDS: "30"
+      CONDUCTOR_HEARTBEAT_SECONDS: "5"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    deploy:
+      replicas: 3
+
+volumes:
+  pgdata:
