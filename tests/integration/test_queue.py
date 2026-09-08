@@ -13,12 +13,12 @@ import time
 from collections import Counter
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from conductor.config import Settings
 from conductor.core.state import TaskState
-from conductor.db.models import TaskRun
+from conductor.db.models import TaskAttempt, TaskRun
 from conductor.db.repositories.runs import TaskQueueRepository
 from conductor.db.repositories.workflows import TaskSpec
 from conductor.db.session import get_sessionmaker
@@ -313,3 +313,43 @@ def test_a_zombie_worker_cannot_overwrite_the_new_owner_s_result(session: Sessio
     task_run = session.get(TaskRun, zombie.task_run_id)
     session.refresh(task_run)  # type: ignore[arg-type]
     assert task_run.output == {"fresh": True}  # type: ignore[union-attr]
+
+
+def test_a_crashed_attempt_is_not_recorded_as_a_success(session: Session) -> None:
+    """Regression test: the audit trail must not launder a crash into a success.
+
+    `_close_attempt` originally matched "the open attempt row for this task"
+    rather than a specific attempt number. A worker killed mid-task leaves its
+    attempt row open forever -- it never got to report anything -- so when a
+    later attempt succeeded it closed *both* rows, stamping the crashed attempt
+    SUCCEEDED with a duration covering the entire outage.
+
+    Found by killing a worker in a live run, not by the suite: every existing
+    test either had a single attempt, or failed explicitly rather than crashing.
+    """
+    make_run(session, make_workflow(session))
+    queue = TaskQueueRepository(session, lease_seconds=2.0)
+
+    crashed = queue.claim_batch("worker-that-dies")[0]
+    session.execute(
+        text("UPDATE task_runs SET lease_expires_at = now() - interval '1 second' WHERE id = :i"),
+        {"i": crashed.task_run_id},
+    )
+    assert queue.reap_expired_leases() == 1
+
+    rescued = queue.claim_batch("worker-that-survives")[0]
+    assert rescued.attempt == 2
+    assert queue.record_success(rescued.task_run_id, "worker-that-survives", {"ok": True}) is True
+    session.flush()
+
+    attempts = {
+        attempt.attempt: attempt
+        for attempt in session.scalars(
+            select(TaskAttempt).where(TaskAttempt.task_run_id == crashed.task_run_id)
+        )
+    }
+    assert set(attempts) == {1, 2}, "both attempts are on record"
+    assert attempts[1].state == TaskState.FAILED, "the crashed attempt must not read as success"
+    assert "lease expired" in (attempts[1].error or "")
+    assert attempts[2].state == TaskState.SUCCEEDED
+    assert attempts[2].worker_id == "worker-that-survives"

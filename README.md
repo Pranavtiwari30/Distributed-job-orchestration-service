@@ -146,7 +146,7 @@ pytest -q
 
 ## Testing
 
-164 tests, 93% line coverage, `mypy --strict` clean.
+165 tests, 93% line coverage, `mypy --strict` clean.
 
 - **Unit** (`tests/unit/`) — no database, no clock, no network. Includes
   property-based tests: random DAGs must topologically sort with every parent
@@ -169,6 +169,13 @@ Tests that earned their place by catching real bugs:
 - `test_skip_locked_actually_lets_workers_overtake_each_other` — holds a lock
   open in one transaction and asserts a second can still claim. Under plain
   `FOR UPDATE` this test hangs, which is the point.
+- `test_a_crashed_attempt_is_not_recorded_as_a_success` — found by `SIGKILL`ing
+  a worker in a live run, not by the suite. Closing an attempt matched "the open
+  row for this task" rather than a specific attempt number, so a later success
+  also closed the crashed worker's orphaned row and stamped it `SUCCEEDED`. The
+  audit trail was quietly laundering crashes into successes. Every existing test
+  missed it because they either had one attempt or failed explicitly rather than
+  crashing.
 
 ## Status
 

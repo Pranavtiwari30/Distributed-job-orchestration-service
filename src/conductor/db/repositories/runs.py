@@ -355,7 +355,10 @@ class TaskQueueRepository(Repository[TaskRun]):
         Returns False if the lease was lost, in which case the caller's work is
         discarded. That is the "loser discards" half of exactly-once effects.
         """
-        result = self.session.execute(
+        # RETURNING the attempt number in the same statement: re-reading it
+        # afterwards would race with a concurrent reap-and-reclaim, and would
+        # then close the wrong attempt row.
+        closed = self.session.execute(
             update(TaskRun)
             .where(
                 TaskRun.id == task_run_id,
@@ -370,12 +373,13 @@ class TaskQueueRepository(Repository[TaskRun]):
                 worker_id=None,
                 version=TaskRun.version + 1,
             )
+            .returning(TaskRun.attempt)
             .execution_options(synchronize_session=False)
-        )
-        if affected_rows(result) != 1:
+        ).all()
+        if len(closed) != 1:
             return False
 
-        self._close_attempt(task_run_id, TaskState.SUCCEEDED)
+        self._close_attempt(task_run_id, closed[0].attempt, TaskState.SUCCEEDED)
         self._unblock_children(task_run_id)
         return True
 
@@ -415,7 +419,7 @@ class TaskQueueRepository(Repository[TaskRun]):
                 )
                 .execution_options(synchronize_session=False)
             )
-            self._close_attempt(task_run_id, terminal, error)
+            self._close_attempt(task_run_id, task_run.attempt, terminal, error)
             self._block_descendants(task_run_id)
             return terminal
 
@@ -435,7 +439,7 @@ class TaskQueueRepository(Repository[TaskRun]):
             )
             .execution_options(synchronize_session=False)
         )
-        self._close_attempt(task_run_id, TaskState.RETRYING, error)
+        self._close_attempt(task_run_id, task_run.attempt, TaskState.RETRYING, error)
         return TaskState.RETRYING
 
     # ---- lease expiry ----------------------------------------------------
@@ -448,7 +452,7 @@ class TaskQueueRepository(Repository[TaskRun]):
         slow gets requeued too, and may then run twice. The unique constraint on
         `task_attempts` is what stops that second run from committing anything.
         """
-        result = self.session.execute(
+        reaped = self.session.execute(
             update(TaskRun)
             .where(
                 TaskRun.state == TaskState.RUNNING,
@@ -461,20 +465,46 @@ class TaskQueueRepository(Repository[TaskRun]):
                 last_error="lease expired; worker presumed dead",
                 version=TaskRun.version + 1,
             )
+            .returning(TaskRun.id, TaskRun.attempt)
             .execution_options(synchronize_session=False)
-        )
-        return affected_rows(result)
+        ).all()
+
+        # Close the attempt rows those workers left open. Nobody else can: the
+        # worker that opened them is gone, and the next attempt is a different
+        # row. Left open they would be closed by whichever attempt eventually
+        # succeeds, silently recording a crash as a success.
+        for row in reaped:
+            self._close_attempt(
+                row.id,
+                row.attempt,
+                TaskState.FAILED,
+                "lease expired; worker presumed dead",
+            )
+        return len(reaped)
 
     # ---- internals -------------------------------------------------------
 
     def _close_attempt(
-        self, task_run_id: uuid.UUID, state: TaskState, error: str | None = None
+        self,
+        task_run_id: uuid.UUID,
+        attempt: int,
+        state: TaskState,
+        error: str | None = None,
     ) -> None:
-        """Stamp the open attempt row with its outcome and duration."""
+        """Stamp one specific attempt row with its outcome and duration.
+
+        Matching on `attempt` and not merely on "the open row for this task" is
+        load-bearing. A worker killed mid-task leaves its attempt row open
+        forever -- it never got to report anything -- so a later, successful
+        attempt would otherwise close the crashed one too and record it as
+        having succeeded, in a table whose whole purpose is to say truthfully
+        what happened. The reaper closes orphaned rows instead.
+        """
         self.session.execute(
             update(TaskAttempt)
             .where(
                 TaskAttempt.task_run_id == task_run_id,
+                TaskAttempt.attempt == attempt,
                 TaskAttempt.finished_at.is_(None),
             )
             .values(
