@@ -50,7 +50,18 @@ jobs:
       - run: uv python install ${{ matrix.python-version }}
       - run: uv sync --extra dev
       # No database needed: everything under core/ is pure.
-      - run: uv run pytest tests/unit -q --cov --cov-report=xml
+      #
+      # Coverage is scoped to the modules this job is actually responsible for.
+      # The package-wide 85% gate in pyproject belongs to the integration job,
+      # which runs the whole suite; applying it here fails by construction,
+      # because this job never imports the database, API or worker-loop layers
+      # and so can never account for their lines.
+      - run: >-
+          uv run pytest tests/unit -q
+          --cov=conductor.core
+          --cov=conductor.worker.executors
+          --cov-report=xml
+          --cov-fail-under=95
 
   integration:
     name: Integration tests
