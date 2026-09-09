@@ -134,14 +134,64 @@ produce zero double-claims.
 uv venv --python 3.11 && source .venv/bin/activate
 uv pip install -e ".[dev]"
 
-# unit tests need nothing but Python
+# Unit tests need nothing but Python -- core/ has no I/O and no clock.
 pytest tests/unit -q
+```
 
-# integration tests need Postgres
-brew services start postgresql@16      # or: docker compose up -d db
+Integration tests need a real PostgreSQL. They create and drop their own schema,
+so no migration step is required to run them:
+
+```bash
+brew services start postgresql@16    # or: docker compose up -d db
 createdb conductor_test
+pytest -q                            # all 165 tests
+```
+
+To run the service itself, migrate a database and start the two processes:
+
+```bash
+createdb conductor
+export CONDUCTOR_DATABASE_URL=postgresql+psycopg://localhost/conductor
 alembic upgrade head
-pytest -q
+
+conductor-api                        # http://localhost:8000/api/v1/docs
+conductor-worker                     # in another shell; start as many as you like
+```
+
+Or bring the whole stack up at once:
+
+```bash
+docker compose up --build            # api + 3 workers + postgres, migrated
+```
+
+### Try it
+
+```bash
+API=http://localhost:8000/api/v1
+
+curl -X POST $API/workflows -H 'Content-Type: application/json' -d '{
+  "name": "nightly-etl",
+  "tasks": [
+    {"key": "extract", "executor": "shell", "params": {"command": "echo extracted"}},
+    {"key": "clean",   "executor": "shell", "params": {"command": "echo cleaned"},  "depends_on": ["extract"]},
+    {"key": "enrich",  "executor": "shell", "params": {"command": "echo enriched"}, "depends_on": ["extract"]},
+    {"key": "load",    "executor": "shell", "params": {"command": "echo loaded"},   "depends_on": ["clean", "enrich"]}
+  ]}'
+
+curl -X POST $API/runs -H 'Content-Type: application/json' \
+     -H 'Idempotency-Key: my-key-1' -d '{"workflow_name": "nightly-etl"}'
+```
+
+Submitting a cyclic workflow returns a 422 naming the cycle:
+
+```json
+{
+  "type": "https://conductor.dev/problems/workflow-cycle",
+  "title": "Workflow contains a cycle",
+  "status": 422,
+  "detail": "workflow contains a cycle: a -> b -> c -> a",
+  "cycle": ["a", "b", "c", "a"]
+}
 ```
 
 ## Testing
@@ -181,3 +231,7 @@ Tests that earned their place by catching real bugs:
 
 Under active development. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is
 built and what is next.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
