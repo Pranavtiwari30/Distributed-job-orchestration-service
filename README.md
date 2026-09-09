@@ -1,5 +1,9 @@
 # Conductor
 
+[![CI](https://github.com/Pranavtiwari30/Distributed-job-orchestration-service/actions/workflows/ci.yml/badge.svg)](https://github.com/Pranavtiwari30/Distributed-job-orchestration-service/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 A distributed job orchestration service. Submit a DAG of tasks over a REST API;
 a scheduler resolves dependencies and a pool of stateless workers executes them
 with leases, retries, and **exactly-once** semantics — including when a worker
