@@ -231,6 +231,14 @@ Tests that earned their place by catching real bugs:
   missed it because they either had one attempt or failed explicitly rather than
   crashing.
 
+## Design
+
+[`docs/DESIGN.md`](docs/DESIGN.md) records why the system is built the way it is
+— the claim query line by line, the distinction between exactly-once delivery and
+exactly-once effects, why each data structure was chosen over the obvious
+alternative, the four bugs found and what found them, and a benchmark that
+contradicted its own hypothesis.
+
 ## Status
 
 Under active development. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is
