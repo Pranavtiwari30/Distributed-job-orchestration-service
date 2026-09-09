@@ -15,7 +15,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from conductor.api.app import API_PREFIX, create_app
-from conductor.api.deps import settings_dependency
 from conductor.config import Settings
 
 pytestmark = pytest.mark.integration
@@ -23,9 +22,10 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture
 def app(settings: Settings, engine: object) -> FastAPI:  # noqa: ARG001 - schema ordering
-    application = create_app(settings)
-    application.dependency_overrides[settings_dependency] = lambda: settings
-    return application
+    # No dependency override needed: `create_app` stores these on app.state and
+    # every handler resolves them from there, so the app genuinely runs against
+    # the test database rather than whatever the environment happens to say.
+    return create_app(settings)
 
 
 @pytest.fixture

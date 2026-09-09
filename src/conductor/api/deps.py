@@ -11,13 +11,22 @@ from fastapi import Depends, Header, Request, status
 from sqlalchemy.orm import Session
 
 from conductor.api.errors import ProblemDetail
-from conductor.config import Settings, get_settings
+from conductor.config import Settings
 from conductor.core.ratelimit import RateLimiter
 from conductor.db.session import get_sessionmaker
 
 
-def settings_dependency() -> Settings:
-    return get_settings()
+def settings_dependency(request: Request) -> Settings:
+    """The settings governing *this* application instance.
+
+    Read from `app.state` rather than the process-global `get_settings()`. The
+    factory already stores them there, and resolving them globally instead meant
+    `create_app(settings)` governed only the parts that read `app.state` while
+    every route handler quietly fell back to the environment -- so an app built
+    with an explicit database URL would happily connect to a different one.
+    """
+    settings: Settings = request.app.state.settings
+    return settings
 
 
 SettingsDep = Annotated[Settings, Depends(settings_dependency)]
